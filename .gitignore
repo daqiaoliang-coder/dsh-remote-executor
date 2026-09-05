@@ -1,0 +1,6 @@
+/bin
+/gateway
+.env
+.idea
+.vscode
+*.log

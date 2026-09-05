@@ -1,0 +1,26 @@
+syntax = "proto3";
+package execution.v1;
+option go_package = "github.com/daqiaoliang-coder/agent-execution-gateway/api/gen";
+
+service ExecutionGateway {
+  rpc CreateWorld(CreateWorldRequest) returns (CreateWorldResponse);
+  rpc DestroyWorld(DestroyWorldRequest) returns (DestroyWorldResponse);
+  rpc StartProcess(StartProcessRequest) returns (StartProcessResponse);
+  rpc WaitProcess(WaitProcessRequest) returns (WaitProcessResponse);
+  rpc KillProcess(KillProcessRequest) returns (KillProcessResponse);
+  rpc ReadOutput(ReadOutputRequest) returns (stream OutputChunk);
+}
+message ResourceSpec { int32 cpu = 1; int64 memory_mb = 2; int32 pids = 3; int64 disk_mb = 4; int32 timeout_sec = 5; }
+message CreateWorldRequest { string tenant_id=1; string session_id=2; ResourceSpec resource=3; }
+message CreateWorldResponse { string world_id=1; int64 generation=2; }
+message DestroyWorldRequest { string world_id=1; int64 generation=2; }
+message DestroyWorldResponse {}
+message StartProcessRequest { string world_id=1; string tenant_id=2; repeated string argv=3; string workdir=4; map<string,string> env=5; int32 timeout_sec=6; int64 output_limit=7; string idempotency_key=8; }
+message StartProcessResponse { string execution_id=1; string process_id=2; }
+message WaitProcessRequest { string process_id=1; }
+message WaitProcessResponse { int32 exit_code=1; string status=2; }
+message KillProcessRequest { string process_id=1; string signal=2; }
+message KillProcessResponse {}
+enum StreamType { STREAM_UNSPECIFIED=0; STDOUT=1; STDERR=2; }
+message ReadOutputRequest { string process_id=1; StreamType stream=2; int64 offset=3; int64 limit=4; }
+message OutputChunk { bytes data=1; int64 offset=2; bool eof=3; }

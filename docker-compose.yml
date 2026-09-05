@@ -1,0 +1,14 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: agent_gateway
+    ports: ["3306:3306"]
+    command: ["--default-authentication-plugin=mysql_native_password"]
+    volumes: ["mysql-data:/var/lib/mysql", "./migrations:/docker-entrypoint-initdb.d:ro"]
+  redis:
+    image: redis:7.4
+    ports: ["6379:6379"]
+volumes:
+  mysql-data:
