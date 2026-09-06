@@ -8,12 +8,14 @@ import (
 	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/repository"
 	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/runtime"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	repo := repository.Repository(repository.NewMemory())
 	svc := execution.NewService(repo, runtime.NewDockerRuntime(os.Getenv("EXECUTION_IMAGE")))
 	rw := &recovery.Worker{S: svc, Interval: 5 * time.Second}

@@ -44,6 +44,9 @@ The important abstraction is **Execution World**, not a per-request container. F
 - MySQL schema + repository
 - HTTP API
 - Harness adapter contracts
+- **loadable Harness plugin** (`remote_execute` tool with retry + circuit breaker)
+- **structured JSON logs** (execution_started / execution_finished / world lifecycle)
+- **`/metrics` endpoint** (Prometheus text format, zero-dependency)
 - unit/integration-style tests
 
 The runnable V1 binary uses the in-memory repository to keep the demo dependency-free; `internal/repository/mysql.go` and `migrations/001_init.sql` provide the durable MySQL implementation for the next integration step.
@@ -97,6 +100,41 @@ curl -X PUT http://localhost:8080/v1/worlds/WORLD_ID/fs/write \
 
 curl 'http://localhost:8080/v1/worlds/WORLD_ID/fs/read?path=/workspace/a.txt'
 ```
+
+Metrics:
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+Every execution is logged as structured JSON on stdout (`execution_started` /
+`execution_finished` with duration, exit code and termination reason).
+
+## DeepSeek Harness plugin
+
+`harness-adapter/` ships a loadable Harness plugin that routes the agent's tool
+execution to this gateway:
+
+```bash
+cd harness-adapter
+npm install
+npm run build
+dsh plugin add <path-or-package>
+```
+
+It registers one tool, `remote_execute` (command / timeout_sec / workdir), which:
+
+- lazily creates an Execution World per session (Docker, no network, resource limits)
+- executes `sh -lc <command>` through the gateway with an idempotency key
+- **retries** retryable gateway failures (network / 5xx / timeout) with exponential
+  backoff + jitter, reusing the same idempotency key (never re-runs a started command)
+- opens a **circuit breaker** after consecutive failures and fails fast with a clear error
+- forwards the harness cancellation signal to in-flight requests and polling
+
+Configuration via plugin config or environment variables:
+`DSH_EXECUTOR_URL` (default `http://127.0.0.1:8080`), `DSH_EXECUTOR_TENANT`
+(default `dsh-default`), and `sessionId` (default `dsh-session`). See
+`harness-adapter/README.md`.
 
 ## Relationship to DeepSeek Harness
 

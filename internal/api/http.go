@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/domain"
 	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/execution"
+	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/repository"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +22,7 @@ func (s *Server) Routes() http.Handler {
 	m.HandleFunc("/v1/worlds/", s.worldSub)
 	m.HandleFunc("/v1/executions/", s.execution)
 	m.HandleFunc("/v1/processes/", s.process)
+	m.Handle("/metrics", s.S.Metrics.Handler())
 	return m
 }
 func tenant(r *http.Request) string {
@@ -33,6 +36,24 @@ func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+func statusFor(e error) int {
+	switch {
+	case errors.Is(e, repository.ErrNotFound):
+		return 404
+	case isBadRequest(e):
+		return 400
+	default:
+		return 500
+	}
+}
+func isBadRequest(e error) bool {
+	for _, s := range []string{"tenant mismatch", "world not ready", "argv is required", "workdir must be", "bad json", "stream must be"} {
+		if strings.Contains(e.Error(), s) {
+			return true
+		}
+	}
+	return false
 }
 func (s *Server) worlds(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
@@ -81,10 +102,15 @@ func (s *Server) worldSub(w http.ResponseWriter, r *http.Request) {
 		}
 		ex, p, e := s.S.Start(r.Context(), tenant(r), id, r.Header.Get("Idempotency-Key"), domain.CommandSpec{Argv: req.Argv, Workdir: req.Workdir, Env: req.Env, TimeoutSec: req.TimeoutSec, OutputLimit: req.OutputLimit})
 		if e != nil {
-			write(w, 500, map[string]string{"error": e.Error(), "execution_id": exID(ex)})
+			write(w, statusFor(e), map[string]string{"error": e.Error(), "execution_id": exID(ex)})
 			return
 		}
-		write(w, 200, map[string]string{"execution_id": ex.ID, "process_id": p.ID})
+		// Idempotent replay returns the existing execution with no new process.
+		resp := map[string]string{"execution_id": ex.ID}
+		if p != nil {
+			resp["process_id"] = p.ID
+		}
+		write(w, 200, resp)
 		return
 	}
 	if len(parts) >= 4 && parts[3] == "fs" {

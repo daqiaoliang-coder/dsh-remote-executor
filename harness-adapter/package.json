@@ -1,0 +1,39 @@
+{
+  "name": "@daqiaoliang-coder/dsh-remote-executor",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness plugin: route tool execution to the remote execution gateway (Go) with sandboxing, idempotency, retry and circuit breaking.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "src"
+  ],
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-tools": "0.0.1-rc.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^5.5.4"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh-plugin",
+    "agent",
+    "executor",
+    "sandbox"
+  ],
+  "license": "MIT"
+}

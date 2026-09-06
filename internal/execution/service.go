@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/domain"
+	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/metrics"
 	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/repository"
 	"github.com/daqiaoliang-coder/agent-execution-gateway/internal/runtime"
+	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -18,6 +20,7 @@ import (
 type Service struct {
 	Repo         repository.Repository
 	Runtime      runtime.Runtime
+	Metrics      *metrics.Metrics
 	mu           sync.Mutex
 	buffers      map[string]*runtime.Buffer
 	procHandles  map[string]runtime.ProcessHandle
@@ -25,7 +28,7 @@ type Service struct {
 }
 
 func NewService(r repository.Repository, rt runtime.Runtime) *Service {
-	return &Service{Repo: r, Runtime: rt, buffers: map[string]*runtime.Buffer{}, procHandles: map[string]runtime.ProcessHandle{}, worldHandles: map[string]runtime.WorldHandle{}}
+	return &Service{Repo: r, Runtime: rt, Metrics: metrics.New(), buffers: map[string]*runtime.Buffer{}, procHandles: map[string]runtime.ProcessHandle{}, worldHandles: map[string]runtime.WorldHandle{}}
 }
 func id(prefix string) string { return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()) }
 func (s *Service) CreateWorld(ctx context.Context, tenant, session string, res domain.ResourceSpec) (*domain.World, error) {
@@ -51,6 +54,7 @@ func (s *Service) CreateWorld(ctx context.Context, tenant, session string, res d
 	s.mu.Lock()
 	s.worldHandles[w.ID] = h
 	s.mu.Unlock()
+	slog.Info("world_created", "world_id", w.ID, "tenant", tenant, "session", session, "runtime", w.RuntimeType)
 	return w, nil
 }
 func (s *Service) DestroyWorld(ctx context.Context, id string, generation int64) error {
@@ -74,6 +78,7 @@ func (s *Service) DestroyWorld(ctx context.Context, id string, generation int64)
 	w.Status = domain.WorldTerminated
 	w.UpdatedAt = time.Now()
 	_ = s.Repo.UpdateWorld(w)
+	slog.Info("world_terminated", "world_id", w.ID, "tenant", w.TenantID)
 	return e
 }
 func (s *Service) Start(ctx context.Context, tenant, worldID, idem string, cmd domain.CommandSpec) (*domain.Execution, *domain.Process, error) {
@@ -116,7 +121,11 @@ func (s *Service) Start(ctx context.Context, tenant, worldID, idem string, cmd d
 	if h.ID == "" {
 		h = runtime.WorldHandle{ID: w.ID, Generation: w.Generation, Ref: w.RuntimeRef}
 	}
-	ph, e := s.Runtime.StartProcess(ctx, h, runtime.ProcessSpec{Argv: cmd.Argv, Workdir: cmd.Workdir, Env: cmd.Env, Timeout: time.Duration(cmd.TimeoutSec) * time.Second, OutputLimit: cmd.OutputLimit})
+	// The process must outlive the HTTP request that started it: the request
+	// context is cancelled once the handler returns, which would kill the
+	// docker exec child. Execution lifecycle is governed by the process
+	// timeout (TERM -> grace -> KILL) inside the runtime, not by the caller.
+	ph, e := s.Runtime.StartProcess(context.Background(), h, runtime.ProcessSpec{Argv: cmd.Argv, Workdir: cmd.Workdir, Env: cmd.Env, Timeout: time.Duration(cmd.TimeoutSec) * time.Second, OutputLimit: cmd.OutputLimit})
 	if e != nil {
 		ex.Status = domain.ExecFailed
 		ex.TerminationReason = "START_FAILED"
@@ -130,6 +139,8 @@ func (s *Service) Start(ctx context.Context, tenant, worldID, idem string, cmd d
 	ex.UpdatedAt = now
 	_ = s.Repo.UpdateExecution(ex)
 	_ = s.Repo.CreateProcess(p)
+	s.Metrics.ExecutionStarted(ex.ID)
+	slog.Info("execution_started", "execution_id", ex.ID, "tenant", tenant, "world_id", w.ID, "process_id", p.ID, "argv", cmd.Argv, "timeout_sec", cmd.TimeoutSec, "output_limit", cmd.OutputLimit, "idempotency_key", idem)
 	out := runtime.NewBuffer(cmd.OutputLimit)
 	errb := runtime.NewBuffer(cmd.OutputLimit)
 	s.mu.Lock()
@@ -145,6 +156,8 @@ func (s *Service) Start(ctx context.Context, tenant, worldID, idem string, cmd d
 func (s *Service) finish(ex *domain.Execution, p *domain.Process, h runtime.ProcessHandle) {
 	r := <-h.Done
 	now := r.FinishedAt
+	dur := now.Sub(r.StartedAt)
+	failed := false
 	p.FinishedAt = &now
 	p.ExitCode = &r.ExitCode
 	if r.ExitCode == 0 {
@@ -154,12 +167,15 @@ func (s *Service) finish(ex *domain.Execution, p *domain.Process, h runtime.Proc
 		p.Status = domain.ProcessExited
 		ex.Status = domain.ExecFailed
 		ex.TerminationReason = "PROCESS_EXIT"
+		failed = true
 	}
 	ex.FinishedAt = &now
 	ex.ExitCode = &r.ExitCode
 	ex.UpdatedAt = now
 	_ = s.Repo.UpdateProcess(p)
 	_ = s.Repo.UpdateExecution(ex)
+	s.Metrics.ExecutionFinished(ex.ID, failed, dur)
+	slog.Info("execution_finished", "execution_id", ex.ID, "tenant", ex.TenantID, "world_id", ex.WorldID, "status", ex.Status, "exit_code", r.ExitCode, "termination_reason", ex.TerminationReason, "duration_ms", dur.Milliseconds())
 }
 func (s *Service) GetExecution(id string) (*domain.Execution, error) { return s.Repo.GetExecution(id) }
 func (s *Service) GetProcess(id string) (*domain.Process, error)     { return s.Repo.GetProcess(id) }
