@@ -1,61 +1,61 @@
 # Agent Execution Gateway v1
 
-Remote Execution & Sandbox Governance for Agent Runtime.
+面向 Agent Runtime 的远程执行与沙箱治理（Remote Execution & Sandbox Governance）。
 
-This project is a standalone Go execution plane designed to complement an Agent Runtime. It models an **Execution World** as the consistency boundary shared by filesystem and processes, and adds lifecycle, idempotency, bounded output, resource limits, leases and crash recovery.
+本项目是一个独立的 Go 执行平面，用于补充 Agent Runtime 的能力。它把 **Execution World（执行世界）** 建模为文件系统与进程共享的一致性边界，并在此基础上提供生命周期管理、幂等、有界输出、资源限制、租约与崩溃恢复能力。
 
-## Architecture
+## 架构
 
 ```text
 DeepSeek Harness / Agent Runtime
         |
  ctx.fs / ctx.subprocess / ctx.shell
         |
- Remote Providers
+ Remote Providers（远程 Provider）
         | HTTP/JSON (v1)
         v
- Go Execution Gateway
-   | admission / idempotency / lifecycle
-   +---- MySQL durable state
-   +---- Redis lease coordination (optional)
+ Go Execution Gateway（Go 执行网关）
+   | admission（准入）/ idempotency（幂等）/ lifecycle（生命周期）
+   +---- MySQL 持久化状态
+   +---- Redis 租约协调（可选）
         |
-   Docker Runtime
+ Docker Runtime（Docker 运行时）
         |
- Execution World
-   +-- /workspace filesystem
-   +-- process group
+ Execution World（执行世界）
+   +-- /workspace 文件系统
+   +-- 进程组
    +-- shell/subprocess
 ```
 
-The important abstraction is **Execution World**, not a per-request container. FS and process calls for one world see the same mutable workspace and process namespace.
+核心抽象是 **Execution World**，而不是"每次请求一个容器"。同一个 world 内的文件系统与进程调用，看到的是同一份可变工作区与进程命名空间。
 
-## V1 scope
+## V1 范围
 
-- ExecutionWorld lifecycle
-- Docker runtime
-- argv-based process execution
-- process-group cleanup: TERM -> grace -> KILL
-- command timeout
-- bounded stdout/stderr buffers with offset reads
-- idempotency by tenant + idempotency key
-- semantic filesystem read/write/edit under `/workspace`
-- Redis lease manager
-- expiry reconciliation
+- Execution World 生命周期管理
+- Docker 运行时
+- 基于 argv 的进程执行
+- 进程组清理：TERM -> 宽限期 -> KILL
+- 命令超时
+- 有界 stdout/stderr 缓冲 + 基于 offset 的读取
+- 按租户 + 幂等键的幂等
+- `/workspace` 下的语义化文件系统读/写/编辑
+- Redis 租约管理器
+- 过期回收（expiry reconciliation）
 - MySQL schema + repository
 - HTTP API
-- Harness adapter contracts
-- **loadable Harness plugin** (`remote_execute` tool with retry + circuit breaker)
-- **structured JSON logs** (execution_started / execution_finished / world lifecycle)
-- **`/metrics` endpoint** (Prometheus text format, zero-dependency)
-- unit/integration-style tests
+- Harness adapter 契约
+- **可加载的 Harness 插件**（`remote_execute` 工具，含重试 + 熔断）
+- **结构化 JSON 日志**（execution_started / execution_finished / world 生命周期）
+- **`/metrics` 指标端点**（Prometheus 文本格式，零依赖）
+- 单元/集成风格测试
 
-The runnable V1 binary uses the in-memory repository to keep the demo dependency-free; `internal/repository/mysql.go` and `migrations/001_init.sql` provide the durable MySQL implementation for the next integration step.
+可运行的 V1 二进制默认使用内存 repository，保证 demo 零外部依赖；`internal/repository/mysql.go` 与 `migrations/001_init.sql` 提供了面向下一步集成验证的 MySQL 持久化实现。
 
-V1 deliberately does not claim production-grade isolation. It is a technical project for demonstrating execution-plane architecture.
+V1 刻意不宣称生产级隔离能力。它是一个用于演示执行平面架构的技术项目。
 
-## Run
+## 运行
 
-Requirements: Go 1.23+, Docker.
+环境要求：Go 1.23+、Docker。
 
 ```bash
 docker compose up -d mysql redis
@@ -63,9 +63,9 @@ go test ./...
 go run ./cmd/gateway
 ```
 
-The gateway listens on `:8080`.
+网关默认监听 `:8080`。
 
-Create a world:
+创建执行世界：
 
 ```bash
 curl -X POST http://localhost:8080/v1/worlds \
@@ -74,7 +74,7 @@ curl -X POST http://localhost:8080/v1/worlds \
   -d '{"session_id":"s1","resource":{"cpu":1,"memory_mb":256,"pids":64,"disk_mb":512,"timeout_sec":60}}'
 ```
 
-Start a process:
+启动进程：
 
 ```bash
 curl -X POST http://localhost:8080/v1/worlds/WORLD_ID/executions \
@@ -84,14 +84,14 @@ curl -X POST http://localhost:8080/v1/worlds/WORLD_ID/executions \
   -d '{"argv":["sh","-lc","echo hello; sleep 1; echo done"],"workdir":"/workspace","timeout_sec":10,"output_limit":1048576}'
 ```
 
-Read status/output:
+查询状态 / 读取输出：
 
 ```bash
 curl http://localhost:8080/v1/executions/EXEC_ID
 curl 'http://localhost:8080/v1/processes/PROCESS_ID/output?stream=stdout&offset=0&limit=65536'
 ```
 
-Write/read a file:
+写入 / 读取文件：
 
 ```bash
 curl -X PUT http://localhost:8080/v1/worlds/WORLD_ID/fs/write \
@@ -101,63 +101,57 @@ curl -X PUT http://localhost:8080/v1/worlds/WORLD_ID/fs/write \
 curl 'http://localhost:8080/v1/worlds/WORLD_ID/fs/read?path=/workspace/a.txt'
 ```
 
-Metrics:
+指标：
 
 ```bash
 curl http://localhost:8080/metrics
 ```
 
-Every execution is logged as structured JSON on stdout (`execution_started` /
-`execution_finished` with duration, exit code and termination reason).
+每次执行都会以结构化 JSON 的形式输出到 stdout（`execution_started` / `execution_finished`，包含 duration、退出码与终止原因）。
 
-## DeepSeek Harness plugin
+## DeepSeek Harness 插件
 
-`harness-adapter/` ships a loadable Harness plugin that routes the agent's tool
-execution to this gateway:
+`harness-adapter/` 目录包含一个可加载的 Harness 插件，把 Agent 的工具执行路由到这个网关：
 
 ```bash
 cd harness-adapter
 npm install
 npm run build
-dsh plugin add <path-or-package>
+dsh plugin add <路径或包名>
 ```
 
-It registers one tool, `remote_execute` (command / timeout_sec / workdir), which:
+它注册了一个工具 `remote_execute`（参数：command / timeout_sec / workdir），具备以下能力：
 
-- lazily creates an Execution World per session (Docker, no network, resource limits)
-- executes `sh -lc <command>` through the gateway with an idempotency key
-- **retries** retryable gateway failures (network / 5xx / timeout) with exponential
-  backoff + jitter, reusing the same idempotency key (never re-runs a started command)
-- opens a **circuit breaker** after consecutive failures and fails fast with a clear error
-- forwards the harness cancellation signal to in-flight requests and polling
+- 按会话懒创建 Execution World（Docker，无网络，带资源限制）
+- 通过网关执行 `sh -lc <command>`，并携带幂等键
+- 对可重试的网关故障（网络 / 5xx / 超时）**重试**：指数退避 + 抖动，并复用同一个幂等键（绝不重复执行已启动的命令）
+- 连续失败后打开**熔断器**，快速失败并给出明确错误
+- 把 harness 的取消信号转发给进行中的请求与轮询
 
-Configuration via plugin config or environment variables:
-`DSH_EXECUTOR_URL` (default `http://127.0.0.1:8080`), `DSH_EXECUTOR_TENANT`
-(default `dsh-default`), and `sessionId` (default `dsh-session`). See
-`harness-adapter/README.md`.
+通过插件配置或环境变量设置：`DSH_EXECUTOR_URL`（默认 `http://127.0.0.1:8080`）、`DSH_EXECUTOR_TENANT`（默认 `dsh-default`）、`sessionId`（默认 `dsh-session`）。详见 `harness-adapter/README.md`。
 
-## Relationship to DeepSeek Harness
+## 与 DeepSeek Harness 的关系
 
-The adapter follows the capability seams conceptually:
+adapter 在概念上遵循 harness 的能力 seam：
 
-- `ctx.fs` -> `FileSystemGateway`
-- `ctx.subprocess` -> execution endpoints
-- `ctx.shell` remains a higher-level consumer of subprocess
+- `ctx.fs` -> 文件系统网关（FileSystemGateway）
+- `ctx.subprocess` -> 执行端点
+- `ctx.shell` -> subprocess 的上层消费者
 
-The remote provider must use one shared `ExecutionWorld`; do not create separate containers for FS and subprocess. This project is intentionally a gateway/runtime implementation rather than a fork of Harness.
+远程 Provider 必须共享同一个 `ExecutionWorld`：不要为文件系统和 subprocess 分别创建容器。本项目定位是网关/运行时实现，而不是对 Harness 的 fork。
 
-## Interview value
+## 面试价值
 
-The project demonstrates distributed-system topics that are useful for Agent Infra:
+该项目覆盖了对 Agent Infra 有用的分布式系统主题：
 
-1. Execution World as a consistency boundary.
-2. Execution != Process: one logical execution can have multiple attempts.
-3. Idempotency before runtime allocation.
-4. Lease version as a fencing token.
-5. Durable state in MySQL; Redis only for coordination.
-6. Process-group lifecycle and orphan prevention.
-7. Output backpressure/bounded memory.
-8. Crash recovery separated from side-effect retry.
-9. FS and process sharing one execution world.
+1. Execution World 作为一致性边界。
+2. Execution ≠ Process：一次逻辑执行可以对应多次尝试（attempt）。
+3. 幂等先于运行时资源分配（idempotency before runtime allocation）。
+4. 租约版本号作为 fencing token。
+5. MySQL 持久化状态；Redis 只做协调。
+6. 进程组生命周期与孤儿进程防护。
+7. 输出背压 / 有界内存。
+8. 崩溃恢复与副作用重试相分离。
+9. 文件系统与进程共享同一个执行世界。
 
-See `docs/design.md` and `docs/interview.md`.
+详见 `docs/design.md` 与 `docs/interview.md`。

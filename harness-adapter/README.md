@@ -1,56 +1,44 @@
-# DeepSeek Harness adapter: `remote_execute` tool
+# DeepSeek Harness adapter：`remote_execute` 工具
 
-A loadable Harness plugin that routes tool execution to the remote execution
-gateway (Go). The gateway runs each command inside an isolated Docker
-Execution World (no network, resource limits, process-group cleanup) and
-guarantees idempotency and bounded output.
+一个可加载的 Harness 插件，把工具执行路由到远程执行网关（Go）。网关在每个隔离的 Docker Execution World（无网络、资源限制、进程组清理）中执行命令，并保证幂等与有界输出。
 
-This directory is a real Cordis plugin (`apply(ctx)` + `defineTool`), not just
-a contract. The original seam mapping still holds:
+这是一个真正的 Cordis 插件（`apply(ctx)` + `defineTool`），而不只是接口契约。原始的 seam 映射仍然成立：
 
-- `ctx.fs` -> `RemoteFileSystemProvider` (see `src/gateway-client.ts`)
+- `ctx.fs` -> `RemoteFileSystemProvider`（见 `src/gateway-client.ts`）
 - `ctx.subprocess` -> `RemoteSubprocessProvider`
-- `ctx.shell` -> a higher-level consumer of subprocess
-- `remote_execute` -> the model-facing tool registered on `ctx.tools`
+- `ctx.shell` -> subprocess 的上层消费者
+- `remote_execute` -> 注册到 `ctx.tools` 的面向模型工具
 
-The same Execution World must be shared by filesystem and process calls: the
-process that writes `/workspace/foo` must observe the same file through reads.
+文件系统与进程调用必须共享同一个 Execution World：写入 `/workspace/foo` 的进程，必须能通过读取看到同一个文件。
 
-## Install
+## 安装
 
 ```bash
 npm install
-npm run build          # emits lib/
-# load into dsh (out-of-tree plugin path, see official plugin docs):
-dsh plugin add /abs/path/to/harness-adapter
+npm run build          # 产出 lib/
+# 加载到 dsh（out-of-tree 插件路径，见官方插件文档）：
+dsh plugin add /绝对路径/harness-adapter
 ```
 
-## Configuration
+## 配置
 
-| Config key | Env var | Default | Meaning |
+| 配置键 | 环境变量 | 默认值 | 含义 |
 |---|---|---|---|
-| `baseUrl` | `DSH_EXECUTOR_URL` | `http://127.0.0.1:8080` | gateway base URL |
-| `tenantId` | `DSH_EXECUTOR_TENANT` | `dsh-default` | gateway tenant isolation |
-| `sessionId` | — | `dsh-session` | session used to derive the Execution World |
-| `maxRetries` | — | `2` | retries for retryable gateway failures |
-| `circuitThreshold` | — | `5` | consecutive failures before circuit opens |
-| `circuitCooldownMs` | — | `30000` | circuit cooldown |
+| `baseUrl` | `DSH_EXECUTOR_URL` | `http://127.0.0.1:8080` | 网关 base URL |
+| `tenantId` | `DSH_EXECUTOR_TENANT` | `dsh-default` | 网关租户隔离 |
+| `sessionId` | — | `dsh-session` | 用于派生 Execution World 的会话 |
+| `maxRetries` | — | `2` | 可重试网关失败的重试次数 |
+| `circuitThreshold` | — | `5` | 熔断前连续失败次数 |
+| `circuitCooldownMs` | — | `30000` | 熔断冷却时间 |
 
-## Reliability contract
+## 可靠性契约
 
-- **Idempotency**: one `crypto.randomUUID()` per logical execution; retries
-  reuse the same key, so a retry after a lost response cannot re-run a command
-  that already started at the gateway (the gateway dedupes before runtime
-  allocation).
-- **Retry**: only retryable failures (network errors, HTTP 5xx, 408, 429,
-  drain/poll timeouts) are retried with exponential backoff + jitter. 4xx and
-  command failures are never retried.
-- **Circuit breaker**: after `circuitThreshold` consecutive retryable failures
-  the client opens for `circuitCooldownMs` and fails fast with a clear error.
-- **Cancellation**: the harness `exec.signal` is forwarded to in-flight fetches
-  and polling loops.
+- **幂等**：每次逻辑执行生成一个 `crypto.randomUUID()`；重试复用同一个键，因此响应丢失后的重试不会重复执行已在网关启动的命令（网关在运行时资源分配之前去重）。
+- **重试**：只重试可重试的失败（网络错误、HTTP 5xx、408、429、输出拉取/轮询超时），使用指数退避 + 抖动。4xx 与命令执行失败绝不重试。
+- **熔断**：连续 `circuitThreshold` 次可重试失败后，客户端进入 `circuitCooldownMs` 冷却并快速失败，给出明确错误。
+- **取消**：harness 的 `exec.signal` 会转发给进行中的 fetch 与轮询循环。
 
-## API reference (client)
+## 客户端 API 参考
 
 ```ts
 import { GatewayClient } from './src/gateway-client.js';
