@@ -6,26 +6,35 @@
 
 ## 架构
 
-```text
-DeepSeek Harness / Agent Runtime
-        |
- ctx.fs / ctx.subprocess / ctx.shell
-        |
- Remote Providers（远程 Provider）
-        | HTTP/JSON (v1)
-        v
- Go Execution Gateway（Go 执行网关）
-   | admission（准入）/ idempotency（幂等）/ lifecycle（生命周期）
-   +---- MySQL 持久化状态
-   +---- Redis 租约协调（可选）
-        |
- Docker Runtime（Docker 运行时）
-        |
- Execution World（执行世界）
-   +-- /workspace 文件系统
-   +-- 进程组
-   +-- shell/subprocess
+```mermaid
+flowchart LR
+    subgraph Agent[Agent Runtime]
+        Harness[DeepSeek Harness]
+        Tool[remote_execute 插件工具]
+        Harness --> Tool
+    end
+
+    Tool -->|HTTP/JSON v1| API[Go Execution Gateway<br/>HTTP API]
+
+    subgraph Gateway[网关控制面]
+        API --> Service[Execution Service<br/>准入 · 幂等 · 生命周期]
+        Service <--> Repo[Repository<br/>默认内存存储]
+        Service --> Runtime[Docker Runtime]
+        Service --> Observability[结构化日志与 /metrics]
+    end
+
+    Runtime --> World[Execution World<br/>一个会话共享一个执行环境]
+    subgraph WorldContents[World 内共享状态]
+        FS[/workspace 文件系统/]
+        Processes[进程树与 shell/subprocess]
+    end
+    World --- FS
+    World --- Processes
+
+    MySQL[(MySQL)] -.可选持久化实现.-> Repo
 ```
+
+文件系统操作和进程执行都路由到同一个 Execution World，因此进程可以访问 Agent 先前写入 `/workspace` 的文件。默认启动使用内存 repository；MySQL repository 已提供实现，但默认二进制尚未接入它。
 
 核心抽象是 **Execution World**，而不是"每次请求一个容器"。同一个 world 内的文件系统与进程调用，看到的是同一份可变工作区与进程命名空间。
 
@@ -140,18 +149,3 @@ adapter 在概念上遵循 harness 的能力 seam：
 
 远程 Provider 必须共享同一个 `ExecutionWorld`：不要为文件系统和 subprocess 分别创建容器。本项目定位是网关/运行时实现，而不是对 Harness 的 fork。
 
-## 面试价值
-
-该项目覆盖了对 Agent Infra 有用的分布式系统主题：
-
-1. Execution World 作为一致性边界。
-2. Execution ≠ Process：一次逻辑执行可以对应多次尝试（attempt）。
-3. 幂等先于运行时资源分配（idempotency before runtime allocation）。
-4. 租约版本号作为 fencing token。
-5. MySQL 持久化状态；Redis 只做协调。
-6. 进程组生命周期与孤儿进程防护。
-7. 输出背压 / 有界内存。
-8. 崩溃恢复与副作用重试相分离。
-9. 文件系统与进程共享同一个执行世界。
-
-详见 `docs/design.md` 与 `docs/interview.md`。
